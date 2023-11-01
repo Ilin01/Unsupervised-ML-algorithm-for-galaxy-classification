@@ -25,10 +25,9 @@ fields=['COSMOS','DEEP23','ELAISN1','SXDSXMMLSS'] # Hyper Supreme-Cam fields
 patch_size = 4 # nr. bins for Fourier Transform radial profile which is half of the patch size (actual patch size is twice)
 patch_step = 4 # space between patches in pixels
 nr_hac_clusters = 1500
-threads = 1
-bands = ['G','R','I','Z']
-bands_rgb_imaging=['I','R','G'] # 3 bands in order from longer to smaller wavelengths
-sigma_clip=3
+CPUs = 1 # number of CPU cores to use
+bands = ['G','R','I','Z'] # imaging filters
+bands_rgb_imaging=['I','R','G'] # 3 bands in order from longer to smaller wavelengths (for rgb imaging purposes)
 
 # path to catalogs with physical parameters
 catalogs_path='...'
@@ -56,7 +55,7 @@ filter_stars=True
 
 run_classify(path_model_dir=path_model_dir, path_data_dir=path_data_dir, 
              bands=bands,
-             threads=threads,
+             threads=CPUs,
              run_number=run_number,
              patch_size=patch_size,
              nr_hac_clusters=nr_hac_clusters,
