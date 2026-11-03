@@ -28,6 +28,7 @@ The codebase has been tested, refactored, and validated on **Hyper Suprime-Cam (
 
 The pipeline accepts the following inputs:
 - **Galaxy Cutout Images (`.npy` format):** Stacked 3D NumPy arrays representing multi-band postage-stamp cutouts of galaxies. The array structure consists of a series of 2D image arrays ordered strictly from the band at the **shortest wavelength to the longest wavelength** (e.g., `['VIS', 'Y', 'J', 'H']` or `[u, g, r, i, z, y]`).
+   - *Directory Structure:* Cutout files should be organized within the data directory under subdirectories named after their tile indices following the convention `path_data_dir/tile_<tile_index>/<object_id>.npy`). Alternatively, a flat folder structure (`path_data_dir/<object_id>.npy`) is supported if `tile_col = None` is configured.
 - **Source Catalogues (`.npz` or `.csv` format):** Pre-selection metadata tables containing object IDs, coordinates, photometric/spectroscopic redshifts ($z$), stellar masses ($M_\star$), and quality flags.
 
 ---
