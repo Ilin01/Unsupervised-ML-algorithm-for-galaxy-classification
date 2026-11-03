@@ -27,7 +27,7 @@ The codebase has been tested, refactored, and validated on **Hyper Suprime-Cam (
 ## Input Data Format
 
 The pipeline accepts the following inputs:
-- **Galaxy Cutout Images (`.npy` format):** Stacked 3D NumPy arrays representing multi-band postage-stamp cutouts of galaxies. The array structure consists of a series of 2D image arrays ordered strictly from the band at the **shortest wavelength to the longest wavelength** (e.g., `['VIS', 'Y', 'J', 'H']` or `[u, g, r, i, z, y]`).
+- **Galaxy Cutout Images (`.npy` format):** Stacked 3D NumPy arrays representing multi-band postage-stamp cutouts of galaxies. These arrays must contain **only the flux of the objects (with background noise removed/masked to nan values)**. The array structure consists of a series of 2D image arrays ordered strictly from the band at the **shortest wavelength to the longest wavelength** (e.g., `['VIS', 'Y', 'J', 'H']` or `[u, g, r, i, z, y]`).
    - *Directory Structure:* Cutout files should be organized within the data directory under subdirectories named after their tile indices following the convention `path_data_dir/tile_<tile_index>/<object_id>.npy`). Alternatively, a flat folder structure (`path_data_dir/<object_id>.npy`) is supported if `tile_col = None` is configured.
 - **Source Catalogues (`.npz` or `.csv` format):** Pre-selection metadata tables containing object IDs, coordinates, photometric/spectroscopic redshifts ($z$), stellar masses ($M_\star$), and quality flags.
 
@@ -36,6 +36,7 @@ The pipeline accepts the following inputs:
 ## Repository Structure & Quick Start
 
 - `ml_script.py` — Master execution script that configures runtime options (including custom band selection for ML feature extraction, RGB montages, and monochrome bands, as well as automatic core resource allocation) and runs the end-to-end UML pipeline.
+- `deblend_objects.py` — Pre-processing utility script to clean, deblend, and isolate galaxy cutouts by removing background noise and centering objects into square arrays.
 - `examples/` — Contains representative visual montages of morphological micro-clusters generated autonomously by the algorithm on **HSC-SSP (LSST-like)** and **Euclid** imaging. Each montage displays representative galaxies ranked by their Euclidean distance to the cluster centroid in feature space.
 
 ### Running the Pipeline
