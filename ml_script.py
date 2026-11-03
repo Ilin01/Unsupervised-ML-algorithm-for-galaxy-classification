@@ -36,9 +36,9 @@ bands_rgb_imaging=['H','J','Y'] # 3 bands in order from longer to smaller wavele
 # HSC catalogs 
 #Euclid_catalog_csv='/beegfs/car/ilazar/EuclidML/catalogs/sample_final_z015M7.csv'
 
-Euclid_catalog_csv=None
+catalog_csv=None
 
-Euclid_catalog_npz='/beegfs/car/ilazar/EuclidML/catalogs/Q1_sample_photoz_15_stellarmass_9_5.npz'
+catalog_npz='/beegfs/car/ilazar/EuclidML/catalogs/Q1_sample_photoz_15_stellarmass_9_5.npz'
 
 VIS_band_only=False
 
@@ -64,4 +64,4 @@ run_classify(path_model_dir=path_model_dir, path_data_dir=path_data_dir,
              nr_hac_clusters=nr_hac_clusters,
              radial_width=1,
              patch_step=patch_step,bands_rgb_imaging=bands_rgb_imaging,
-             Euclid_catalog_csv=Euclid_catalog_csv,Euclid_catalog_npz=Euclid_catalog_npz,VIS_band_only=VIS_band_only)
+             catalog_csv=catalog_csv,catalog_npz=Euclid_catalog_npz,VIS_band_only=VIS_band_only)

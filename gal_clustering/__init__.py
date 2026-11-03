@@ -27,8 +27,8 @@ def run_classify(path_model_dir=None, path_data_dir=None,
     radial_width=1,
     patch_step=8,
     bands_rgb_imaging=None,
-    Euclid_catalog_csv=None,
-    Euclid_catalog_npz=None,
+    catalog_csv=None,
+    catalog_npz=None,
     VIS_band_only=False):
 
 
@@ -50,26 +50,23 @@ def run_classify(path_model_dir=None, path_data_dir=None,
 
     start_time = time.time()
 
-    if Euclid_catalog_npz==None:
+    if catalog_npz==None:
 
         object_catalogue=pd.read_csv(Euclid_catalog_csv)
 
-    if Euclid_catalog_csv==None:
+    if catalog_csv==None:
         data = np.load(Euclid_catalog_npz)
         object_catalogue=pd.DataFrame({key: data[key] for key in data.files})
         object_catalogue=object_catalogue.loc[object_catalogue['flag_resolved']=='yes']
         object_catalogue = object_catalogue.loc[(object_catalogue['phz_pp_median_stellarmass']>=10.5) & (object_catalogue['phz_pp_median_redshift']<0.5) ]
         data.close()
-        #print(object_catalogue['object_id'][:10])
-        #print(object_catalogue['tile_index'][:10])
 
-    
     # Run patch extraction (calculate radial power spectrums for griz galaxy images)
     
     if not os.path.exists(path_model_dir):
         os.mkdir(path_model_dir)
     print('model '+str(run_number)+': THE PATCH EXTRACTION IS PROCESSSING')
-    patch_extractionn(path_model_dir,threads,window_size, radial_width, patch_step,Euclid_catalog_csv,Euclid_catalog_npz,path_data_dir,VIS_band_only)
+    patch_extractionn(path_model_dir,threads,window_size, radial_width, patch_step,catalog_csv,catalog_npz,path_data_dir,VIS_band_only)
     print('model '+str(run_number)+': PATCH EXTRACTION FINISHED')
 
 
@@ -80,16 +77,7 @@ def run_classify(path_model_dir=None, path_data_dir=None,
 
     
     # Create miniBatch Kmenas model (reduce the size of the feature space by means of minibatch kmeans)
-    nodes,scaled_samples=optimized_model2(run_number,samples)
-
-    #print(len(nodes),len(scaled_samples))
-
-    #np.save('/beegfs/car/ilazar/EuclidML/scripts/nodes.npy',nodes)
-    #np.save('/beegfs/car/ilazar/EuclidML/scripts/scaled_samples.npy',scaled_samples)
-
-    #nodes=np.load('/beegfs/car/ilazar/EuclidML/scripts/nodes.npy')
-    #scaled_samples=np.load('/beegfs/car/ilazar/EuclidML/scripts/scaled_samples.npy')
-
+    nodes,scaled_samples=optimized_model(run_number,samples)
 
 
 
@@ -115,31 +103,12 @@ def run_classify(path_model_dir=None, path_data_dir=None,
     np.save(path_model_dir+'FINAL_FEATURE_VECT.npy',final_feature_vect)
     np.save(path_model_dir+'FINAL_OBJECT_IDS.npy',final_object_ids)
 
-    #print(object_catalogue.columns)
-
-
-
-    #object_catalogue=object_catalogue.rename(columns={"object_id": "object_id2"})
-
-    #object_catalogue['object_id']=object_catalogue['ind'].values
 
 
     # Create final morphological clusters (k-means clustering)
     obj_catalogue=kmeans_model(run_number,path_model_dir,threads,object_catalogue)
 
     
-
-    #qwef
-
-    #npz = np.load('/beegfs/car/ilazar/EuclidML/model_4/final_morph_clust4.npz',allow_pickle=True)
-    #obj_catalogue= pd.DataFrame.from_dict({item: npz[item] for item in npz.files})
-
-    #print(obj_catalogue['object_id'][:10])
-    #print(obj_catalogue['tile_index'][:10])
-
-    #qwef
-
-    #print(len(obj_catalogue))
 
 
     # Create an image montage of the morphological clusters
