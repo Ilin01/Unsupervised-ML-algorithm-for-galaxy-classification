@@ -2,12 +2,12 @@ import os
 from gal_clustering import run_classify
 
 # Model / run identifier
-run_number = '43'
+run_number = '1'
 
 # Paths to main, model, and cutout directories
-path_main_dir = '/beegfs/car/ilazar/EuclidML/'
+path_main_dir = '/.../EuclidML/'
 path_model_dir = os.path.join(path_main_dir, f'model_{run_number}/')
-path_data_dir = '/beegfs/car/ilazar/EuclidML/data/Q1/cutouts/npy_stacked_z15M9_5_5/'
+path_data_dir = '/.../npy_stacked_z15M9_5_5/'
 
 # Pipeline hyperparameters
 patch_size = 4          # Half-width of patch in pixels
@@ -18,20 +18,20 @@ CPUs = None             # Number of CPU cores to use (Set to None or 'all' to us
 
 # --- Band & Imaging Configuration ---
 # All bands present in the .npy file stacked array (ordered from shortest to longest wavelength)
-available_bands = ['VIS', 'Y', 'J', 'H']
+available_bands = ['u', 'g', 'r', 'i', 'z','y']
 
 # Specific subset of bands you want the ML model to ingest and extract patches from (must be >= 2)
-selected_bands_ml = ['VIS', 'Y', 'H']
+selected_bands_ml = ['u', 'g', 'r', 'i', 'z']
 
-# 3 bands chosen for the RGB Lupton montage (must be exactly 3 from available_bands)
+# 3 bands chosen for the RGB Lupton montage (must be exactly 3 from available_bands ordered from the longest to the shortest wavelength)
 bands_rgb_imaging = ['H', 'J', 'Y']
 
 # Specific band chosen for the monochrome image montage
-monochrome_band = 'VIS'
+monochrome_band = 'g'
 # ------------------------------------
 
 # Path to input catalogue (.csv or .npz extension is detected automatically)
-catalog_path = '/beegfs/car/ilazar/EuclidML/catalogs/Q1_sample_photoz_15_stellarmass_9_5.npz'
+catalog_path = '/.../Q1_sample_photoz_15_stellarmass_9_5.npz'
 
 # Catalogue column definitions
 id_col = 'object_id'                        # The ID column
@@ -42,7 +42,7 @@ quality_flag_col = 'flag_resolved'          # The quality flag column name ( Set
 quality_flag_val = 'yes'                    # The value of the quality flag column name
 
 # Physical parameter selection cuts (set any bound to None to disable)
-mass_min = 10.5
+mass_min = 9.5
 mass_max = None
 z_min = 0.0
 z_max = 0.5
