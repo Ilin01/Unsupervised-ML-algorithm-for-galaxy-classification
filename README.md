@@ -58,7 +58,7 @@ The pipeline accepts the following inputs:
 
 If you use or adapt this software for your research, please cite the following papers:
 
-* **Lazar, I., et al. (2023)**, *MNRAS*, 520, 2109 — [The morphological mix of galaxies in the low-redshift Universe](https://doi.org/10.1093/mnras/stad223)
+* **Lazar, I., et al. (2023)**, *MNRAS*, 520, 2109 — [Relaxed blue ellipticals: accretion-driven stellar growth is a key evolutionary channel for low mass elliptical galaxies](https://doi.org/10.1093/mnras/stad224)
 * **Martin, G., et al. (2020)**, *MNRAS*, 491, 1408 — [Galaxy morphological classification in deep-wide surveys via unsupervised machine learning](https://doi.org/10.1093/mnras/stz3006)
 * **Hocking, A., et al. (2018)**, *MNRAS*, 473, 1108 — [An automatic taxonomy of galaxy morphology using unsupervised machine learning](https://doi.org/10.1093/mnras/stx2651)
 
