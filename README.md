@@ -27,15 +27,15 @@ The codebase has been tested, refactored, and validated on **Hyper Suprime-Cam (
 ## Input Data Format
 
 The pipeline accepts the following inputs:
-* **Galaxy Cutout Images (`.npy` format):** Monochrome (single-band) or multi-band postage-stamp arrays of galaxies.
-* **Source Catalogues (`.npz` or `.csv` format):** Pre-selection metadata tables containing object IDs, coordinates, photometric/spectroscopic redshifts ($z$), stellar masses ($M_\star$).
+- **Galaxy Cutout Images (`.npy` format):** Stacked 3D NumPy arrays representing multi-band postage-stamp cutouts of galaxies. The array structure consists of a series of 2D image arrays ordered strictly from the band at the **shortest wavelength to the longest wavelength** (e.g., `['VIS', 'Y', 'J', 'H']` or `[u, g, r, i, z, y]`).
+- **Source Catalogues (`.npz` or `.csv` format):** Pre-selection metadata tables containing object IDs, coordinates, photometric/spectroscopic redshifts ($z$), stellar masses ($M_\star$), and quality flags.
 
 ---
 
 ## Repository Structure & Quick Start
 
-* `ml_script.py` — Master execution script that runs the end-to-end UML pipeline (patch extraction, codebook learning, TF-IDF/SVD dimensionality reduction, galaxy-level clustering, and diagnostic visualization).
-* `examples/` — Contains representative visual montages of morphological micro-clusters generated autonomously by the algorithm on **HSC-SSP (LSST-like)** and **Euclid** imaging. Each montage displays representative galaxies ranked by their Euclidean distance to the cluster centroid in feature space.
+- `ml_script.py` — Master execution script that configures runtime options (including custom band selection for ML feature extraction, RGB montages, and monochrome bands, as well as automatic core resource allocation) and runs the end-to-end UML pipeline.
+- `examples/` — Contains representative visual montages of morphological micro-clusters generated autonomously by the algorithm on **HSC-SSP (LSST-like)** and **Euclid** imaging. Each montage displays representative galaxies ranked by their Euclidean distance to the cluster centroid in feature space.
 
 ### Running the Pipeline
 
@@ -48,7 +48,7 @@ The pipeline accepts the following inputs:
    Ensure you have a standard scientific Python environment (`numpy`, `scipy`, `scikit-learn`, `astropy`, `pandas`, `matplotlib`, `sep`).
 
 3. **Execute the main pipeline:**
-   Configure your input cutout and catalogue paths inside `ml_script.py` and run:
+   Configure your input paths, selected bands, and catalogue columns inside `ml_script.py` and run:
 
        python ml_script.py
 
@@ -58,9 +58,9 @@ The pipeline accepts the following inputs:
 
 If you use or adapt this software for your research, please cite the following papers:
 
-* **Lazar, I., et al. (2023)**, *MNRAS*, 520, 2109 — [Relaxed blue ellipticals: accretion-driven stellar growth is a key evolutionary channel for low mass elliptical galaxies](https://doi.org/10.1093/mnras/stad224)
-* **Martin, G., et al. (2020)**, *MNRAS*, 491, 1408 — [Galaxy morphological classification in deep-wide surveys via unsupervised machine learning](https://doi.org/10.1093/mnras/stz3006)
-* **Hocking, A., et al. (2018)**, *MNRAS*, 473, 1108 — [An automatic taxonomy of galaxy morphology using unsupervised machine learning](https://doi.org/10.1093/mnras/stx2351)
+- **Lazar, I., et al. (2023)**, *MNRAS*, 520, 2109 — [Relaxed blue ellipticals: accretion-driven stellar growth is a key evolutionary channel for low mass elliptical galaxies](https://doi.org/10.1093/mnras/stad224)
+- **Martin, G., et al. (2020)**, *MNRAS*, 491, 1408 — [Galaxy morphological classification in deep-wide surveys via unsupervised machine learning](https://doi.org/10.1093/mnras/stz3006)
+- **Hocking, A., et al. (2018)**, *MNRAS*, 473, 1108 — [An automatic taxonomy of galaxy morphology using unsupervised machine learning](https://doi.org/10.1093/mnras/stx2351)
 
 ---
 

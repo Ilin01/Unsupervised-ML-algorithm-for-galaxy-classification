@@ -1,67 +1,76 @@
-import glob
-from gal_clustering import run_classify
 import os
-import numpy as np
-import pandas as pd
+from gal_clustering import run_classify
 
+# Model / run identifier
+run_number = '43'
 
+# Paths to main, model, and cutout directories
+path_main_dir = '/beegfs/car/ilazar/EuclidML/'
+path_model_dir = os.path.join(path_main_dir, f'model_{run_number}/')
+path_data_dir = '/beegfs/car/ilazar/EuclidML/data/Q1/cutouts/npy_stacked_z15M9_5_5/'
 
-# model number (int)
-run_number='43'
+# Pipeline hyperparameters
+patch_size = 4          # Half-width of patch in pixels
+patch_step = 4          # Step size between patches in pixels
+radial_width = 1        # Radial bin width for 2D FFT power spectrum
+nr_hac_clusters = 1500  # Number of HAC codebook clusters
+CPUs = None             # Number of CPU cores to use (Set to None or 'all' to use all available cores)
 
+# --- Band & Imaging Configuration ---
+# All bands present in the .npy file stacked array (ordered from shortest to longest wavelength)
+available_bands = ['VIS', 'Y', 'J', 'H']
 
-# path to main directory
-path_main_dir='/beegfs/car/ilazar/EuclidML/'
+# Specific subset of bands you want the ML model to ingest and extract patches from (must be >= 2)
+selected_bands_ml = ['VIS', 'Y', 'H']
 
-# path to directory for specific model
-path_model_dir=path_main_dir+'model_'+str(run_number)+'/'
+# 3 bands chosen for the RGB Lupton montage (must be exactly 3 from available_bands)
+bands_rgb_imaging = ['H', 'J', 'Y']
 
+# Specific band chosen for the monochrome image montage
+monochrome_band = 'VIS'
+# ------------------------------------
 
-# path to data directory
-#path_data_dir='/beegfs/car/ilazar/EuclidML/data/Q1/cutouts/npy_stacked_z015M7_clean/'
-path_data_dir='/beegfs/car/ilazar/EuclidML/data/Q1/cutouts/npy_stacked_z15M9_5_5/'
-#fields=['COSMOS'] # Hyper Supreme-Cam fields
+# Path to input catalogue (.csv or .npz extension is detected automatically)
+catalog_path = '/beegfs/car/ilazar/EuclidML/catalogs/Q1_sample_photoz_15_stellarmass_9_5.npz'
 
+# Catalogue column definitions
+id_col = 'object_id'                        # The ID column
+tile_col = 'tile_index'                     # Set to None if cutouts are in a flat folder
+mass_col = 'phz_pp_median_stellarmass'      # The stellar mass column name
+z_col = 'phz_pp_median_redshift'            # The redshift column name
+quality_flag_col = 'flag_resolved'          # The quality flag column name ( Set to None if your catalogue does not contain a quality/star-galaxy flag)
+quality_flag_val = 'yes'                    # The value of the quality flag column name
 
-patch_size = 4 # nr. bins for Fourier Transform radial profile which is half of the patch size (actual patch size is twice)
-patch_step = 4 # space between patches in pixels
-nr_hac_clusters = 1500
-CPUs = 30 # number of CPU cores to use
-bands = ['VIS','Y','J','H'] # imaging filters
-bands_rgb_imaging=['H','J','Y'] # 3 bands in order from longer to smaller wavelengths (for rgb imaging purposes)
+# Physical parameter selection cuts (set any bound to None to disable)
+mass_min = 10.5
+mass_max = None
+z_min = 0.0
+z_max = 0.5
 
-# path to catalogs with physical parameters
-#catalogs_path='...'
-
-# HSC catalogs 
-#Euclid_catalog_csv='/beegfs/car/ilazar/EuclidML/catalogs/sample_final_z015M7.csv'
-
-catalog_csv=None
-
-catalog_npz='/beegfs/car/ilazar/EuclidML/catalogs/Q1_sample_photoz_15_stellarmass_9_5.npz'
-
-VIS_band_only=False
-
-# mass and redshift constraints to be used by the algorithm
-#Z_max=0.15   # can be None or float
-#Z_min=0      # can only be float or int
-#mass_min=7   # can only be float or int
-#mass_max=9.5  # can be None or float
-
-
-
-# use the stars flag from the HSC catalog
-#filter_stars=True
-
-
-# Run classification
-
-run_classify(path_model_dir=path_model_dir, path_data_dir=path_data_dir, 
-             bands=bands,
-             threads=CPUs,
-             run_number=run_number,
-             patch_size=patch_size,
-             nr_hac_clusters=nr_hac_clusters,
-             radial_width=1,
-             patch_step=patch_step,bands_rgb_imaging=bands_rgb_imaging,
-             catalog_csv=catalog_csv,catalog_npz=Euclid_catalog_npz,VIS_band_only=VIS_band_only)
+# Run classification pipeline
+if __name__ == '__main__':
+    run_classify(
+        path_model_dir=path_model_dir,
+        path_data_dir=path_data_dir,
+        catalog_path=catalog_path,
+        available_bands=available_bands,
+        selected_bands_ml=selected_bands_ml,
+        bands_rgb_imaging=bands_rgb_imaging,
+        monochrome_band=monochrome_band,
+        threads=CPUs,
+        run_number=run_number,
+        patch_size=patch_size,
+        nr_hac_clusters=nr_hac_clusters,
+        radial_width=radial_width,
+        patch_step=patch_step,
+        id_col=id_col,
+        tile_col=tile_col,
+        mass_col=mass_col,
+        z_col=z_col,
+        quality_flag_col=quality_flag_col,
+        quality_flag_val=quality_flag_val,
+        mass_min=mass_min,
+        mass_max=mass_max,
+        z_min=z_min,
+        z_max=z_max
+    )
