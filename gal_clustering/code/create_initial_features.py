@@ -1,115 +1,69 @@
+import os
 import glob
-import pandas as pd
-import re
 import numpy as np
+import gc # Added for explicit garbage collection
 from tqdm import tqdm
-from multiprocessing import Pool
-from multiprocessing import Manager
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
+def create_vect(run_number, path_model_dir, VIS_band_only):
 
-def create_vect(run_number,path_model_dir,threads,fields):
+    print(f'model {run_number}: CREATION OF INITIAL FEATURE VECTOR ...')
 
-    print('model '+str(run_number)+': CREATION OF INITIAL FEATURE VECTOR ...')
+    # --- 1. LOAD CHUNKED FILES ---
+    patch_dir = os.path.join(path_model_dir, 'patches')
+    sample_files = sorted(glob.glob(os.path.join(patch_dir, 'samples_chunk_*.npy')))
+    id_files = sorted(glob.glob(os.path.join(patch_dir, 'samples_object_id_chunk_*.npy')))
+    
+    if len(sample_files) == 0:
+        raise FileNotFoundError(f"No chunk files found in {patch_dir}.")
 
-    def atoi(text):
-        return int(text) if text.isdigit() else text
-
-    def natural_keys(text):
+    print(f"Found {len(sample_files)} chunks. Loading and concatenating...")
+    
+    samples_list = []
+    ids_list = []
+    
+    for s_file, i_file in tqdm(zip(sample_files, id_files), total=len(sample_files), desc="Loading chunks"):
+        samples_list.append(np.load(s_file))
+        ids_list.append(np.load(i_file))
         
-        return [ atoi(c) for c in re.split(r'(\d+)', text) ]
-
-    FILES_samp=[]
-    FILES_ID=[]
-    FIELD_arr=[]
-
-    for field in fields:
-        path_patch_dir=path_model_dir+'patches_'+field+'/'
-
-        files_samp=glob.glob(path_patch_dir+'*/samples.npy')
-        files_id=glob.glob(path_patch_dir+'*/samples_object_id.npy')
-
-        files_samp.sort(key=natural_keys)
-        files_id.sort(key=natural_keys)
-
-        field_array=[field for i in range(len(files_id))]
-        FIELD_arr.extend(field_array)
-
-        FILES_samp.extend(files_samp)
-        FILES_ID.extend(files_id)
-
-
-    ALL=Manager().list()
-
-    global create_vect
+    samples = np.vstack(samples_list)
+    samples_ids = np.concatenate(ids_list, axis=0)
     
-
-    def create_vect(idx):
-
-        ALL.append([np.load(FILES_samp[idx],allow_pickle=True).tolist(),np.load(FILES_ID[idx],allow_pickle=True).tolist(),[FIELD_arr[idx] for i in range(len(np.load(FILES_ID[idx],allow_pickle=True)))]])
-
-    with Pool(threads) as b:
-        r=list(tqdm(b.imap(create_vect, [idx for idx in range(len(FILES_ID))]),total=len(FILES_ID)))
+    # Aggressive memory cleanup
+    del samples_list
+    del ids_list
+    gc.collect() 
     
-    del create_vect
+    print(f'model {run_number}: The number of patches extracted is: {len(samples_ids)}')
+    print(f'Original feature vector dimensionality: {samples.shape[1]}')
 
-    samples=np.array([j for sub in list(zip(*ALL))[0] for j in sub])
-    samples_ids=np.array([j for sub in list(zip(*ALL))[1] for j in sub])
-    samples_field=np.array([j for sub in list(zip(*ALL))[2] for j in sub])
+    # --- 2. STANDARDIZATION ---
+    print("Standardizing features...")
+    # copy=False applies the standardization in-place, saving massive amounts of RAM
+    scaler = StandardScaler(copy=False) 
+    samples_scaled = scaler.fit_transform(samples)
     
-    print('model '+str(run_number)+': The number of patches extracted is: ',len(samples_ids))
+    # 'samples' and 'samples_scaled' now point to the same memory block, 
+    # so we don't need to delete 'samples' separately.
 
-
- 
-    # Pick patches with highest dispersion from the mean to be first in the matrix (first vertically and next horiz)
-
+    # --- 3. PCA COMPRESSION ---
+    print("Applying PCA to extract highest-dispersion features...")
     
-    samples1=np.empty(np.shape(samples))
+    # Retain 95% of the variance rather than a hardcoded number of components.
+    # This automatically adapts to single-band vs multi-band dimensionality.
+    pca = PCA(n_components=0.95, random_state=42)
+    samples_pca = pca.fit_transform(samples_scaled)
     
-    for column_index in range(len(samples[0])):
-
-        mean=np.mean(samples[:,column_index])
-
-        for row_index in range(len(samples)):
-
-            val=abs(samples[row_index][column_index]-mean)
-
-            samples1[row_index][column_index]=val
-
-    samples2=np.empty(len(samples))
-
-    for row_index in range(len(samples1)):
-
-        stdd=np.std(samples1[row_index])
-
-        samples2[row_index]=stdd
-
-    df=pd.DataFrame(samples)
-
-
-    df['order_std']=samples2
-
-    df['samples_ids']=samples_ids
-
-    df['samples_field']=samples_field
-
-    df=df.sort_values(by='order_std', ascending=True)
-
-    df=df.reset_index()
-
-    df=df.drop(['index'], axis=1)
-
-    samples_ids=np.array(df['samples_ids'].values)
-
-    samples_field=np.array(df['samples_field'].values)
-
-
-    df=df.drop(columns=['samples_ids', 'order_std','samples_field'])
-
-    samples=np.array(df.values)
-
-    del df
+    n_components_kept = pca.n_components_
+    explained_variance = np.sum(pca.explained_variance_ratio_)
     
+    print(f"PCA complete.")
+    print(f"Reduced from {samples_scaled.shape[1]} to {n_components_kept} components.")
+    print(f"These {n_components_kept} components capture {explained_variance * 100:.2f}% of the variance.")
 
-    return samples,samples_ids,samples_field
+    # We return the PCA features regardless of VIS_band_only because the 
+    # concatenated multi-scale vectors require dimensionality reduction.
+    print(f'model {run_number}: Vector creation complete.')
     
-
+    return samples_pca, samples_ids

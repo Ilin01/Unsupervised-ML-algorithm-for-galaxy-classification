@@ -1,40 +1,32 @@
 import numpy as np
 from tqdm import tqdm
 from sklearn.cluster import AgglomerativeClustering
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import pairwise_distances_argmin
 
+def agg_model(run_number, threads, nr_hac_clusters, nodes, scaled_samples, samples_ids):
 
+    print(f'model {run_number}: AGG CLUSTERING HAS STARTED')
 
+    if len(nodes) > 30000:
+        print(f"WARNING: You are passing {len(nodes)} nodes to HAC. Keep an eye on system memory.")
 
-
-def agg_model(run_number,threads,nr_hac_clusters,nodes,scaled_samples,samples_ids, samples_field):
-
-    print('model '+str(run_number)+': AGG CLUSTERING HAS STARTED')
-
-    rng = np.random.RandomState(0)
-
-    classifier = RandomForestClassifier(n_jobs=threads,n_estimators=1000,random_state=rng,verbose=0)
-
+    # 1. Cluster the 50,000 nodes into a smaller, cleaner set of morphological "words"
     clusterer = AgglomerativeClustering(n_clusters=nr_hac_clusters)
+    node_labels = clusterer.fit_predict(nodes)
 
-    y=clusterer.fit_predict(nodes)
-    classifier.fit(nodes,y)
+    # 2. Predict labels for the massive original dataset
+    clust1_labels = np.empty(len(scaled_samples), dtype=np.int32)
+    batch_size = 100000 
+    
+    for i in tqdm(range(0, len(scaled_samples), batch_size), desc="Assigning Labels"):
+        batch = scaled_samples[i : i + batch_size]
+        
+        # Find the index of the closest node for each patch in the batch
+        closest_node_indices = pairwise_distances_argmin(batch, nodes)
+        
+        # Map that node index to the overarching HAC label
+        clust1_labels[i : i + batch_size] = node_labels[closest_node_indices]
 
- 
-    clust1_labels=np.empty(len(scaled_samples))
-    slicee=1000
-    values=np.array(range(0,len(scaled_samples),slicee))
-    for sample in tqdm(values[:-1]):
-        if sample==values[-2]:
-            clust1_labels[sample:]=classifier.predict(scaled_samples[sample:])
+    print(f'model {run_number}: AGG CLUSTERING HAS FINISHED')
 
-        else:
-            clust1_labels[sample:sample+slicee]=classifier.predict(scaled_samples[sample:sample+slicee])
-
-
-    clust1_labels=np.array(clust1_labels).astype(int)
-
-
-    print('model '+str(run_number)+': AGG CLUSTERING HAS FINISHED')
-
-    return clust1_labels,clusterer.n_clusters_
+    return clust1_labels, clusterer.n_clusters_

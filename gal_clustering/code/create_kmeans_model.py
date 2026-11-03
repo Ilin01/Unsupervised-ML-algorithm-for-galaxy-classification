@@ -1,124 +1,172 @@
+import os
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_samples
-from sklearn.metrics import silhouette_score as score
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans, MiniBatchKMeans
+from sklearn.metrics import silhouette_samples, silhouette_score as score, pairwise_distances
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import Normalizer
 
-
-
-def kmeans_model(run_number,path_model_dir,threads,object_catalogue):
-
-    print('model '+str(run_number)+': THE FINAL MORPHOLOGICAL CLUSTERS ARE BEING CREATED')
-
+def auto_truncated_svd(feature_matrix, max_search_comps=500, min_comps=30):
+    """
+    Fits SVD up to max_search_comps and mathematically locates the 'knee' 
+    where morphological signal flattens into background noise.
+    """
+    n_samples, n_features = feature_matrix.shape
+    hard_limit = min(n_samples - 1, n_features - 1)
+    upper_bound = min(max_search_comps, hard_limit)
     
-
-    FINAL_OBJECT_IDS=np.load(path_model_dir+'FINAL_OBJECT_IDS.npy',allow_pickle=True)
-    FINAL_FEATURE_VECT=np.load(path_model_dir+'FINAL_FEATURE_VECT.npy',allow_pickle=True)
-    FINAL_FIELD_VECT=np.load(path_model_dir+'FINAL_FIELD_VECT.npy',allow_pickle=True)
-
-
-
-    d = {'object_id': FINAL_OBJECT_IDS}
-    objectIDs = pd.DataFrame(data=d)
-
-
-    feature_vectt = pd.DataFrame(FINAL_FEATURE_VECT)
-
-    overall_sil_scores_array=[]
-
-    lower_clust_lim=160
-    higher_clust_lim=300
-
-    nr_final_clusters_array=np.array(range(lower_clust_lim,higher_clust_lim,10))
-
-
-    # find model with highest silh score by changing the number of clusters and then redo the model with the optimal prameters
-    for nr_final_clusters in nr_final_clusters_array:
-
-        kmeans = KMeans(n_clusters=nr_final_clusters, random_state=0,verbose=0,n_jobs=threads).fit(FINAL_FEATURE_VECT)
-        print('nr iter run:'+str(kmeans.n_iter_))
-
-        clust2_labels=kmeans.labels_
-
-
-        sil_score_for_model1=score(FINAL_FEATURE_VECT,clust2_labels,metric='euclidean',sample_size=10000)
-        sil_score_for_model2=np.round(sil_score_for_model1,3)
-
-
-        overall_sil_scores_array.append(sil_score_for_model1)
-
-        print('model '+str(run_number)+': the silhouette score for the final clustering model with '+str(nr_final_clusters)+' clusters is: ', sil_score_for_model2)
-
-
+    print(f"Scanning top {upper_bound} SVD components to locate the morphological noise floor...")
+    svd = TruncatedSVD(n_components=upper_bound, random_state=42)
+    svd_full = svd.fit_transform(feature_matrix)
+    cum_var = np.cumsum(svd.explained_variance_ratio_)
     
-
-    models=pd.DataFrame({'nr_clusters': nr_final_clusters_array,'silhouette_score': overall_sil_scores_array})
-
-    max_valsIndex=models['silhouette_score'].idxmax()
-
-    max_score_nrClust=models['nr_clusters'][max_valsIndex]
-
-    max_silhouette_score=models['silhouette_score'][max_valsIndex]
-
-    print('model '+str(run_number)+': the number of clusters with the highest silhouette score (which is '+str(np.round(max_silhouette_score,3))+') is ' +str(max_score_nrClust))
-
-
-    kmeans = KMeans(n_clusters=max_score_nrClust, random_state=0,verbose=0,n_jobs=threads).fit(FINAL_FEATURE_VECT)
-
-    clust2_labels=kmeans.labels_
-
-    sil_score_for_model=score(FINAL_FEATURE_VECT,clust2_labels,metric='euclidean')
-
-    print('model '+str(run_number)+': the actual silhouette score for the final clustering model with '+str(max_score_nrClust)+' clusters is: ', np.round(sil_score_for_model,3))
-
-
-    sil_score=silhouette_samples(FINAL_FEATURE_VECT,clust2_labels,metric='euclidean')
-
-    d = {'silhouette_score': sil_score}
-    sil_score = pd.DataFrame(data=d)
-
-
-    d = {'labels': clust2_labels}
-    clust2_labels=pd.DataFrame(data=d)
-
-    d = {'field': FINAL_FIELD_VECT}
-    fields=pd.DataFrame(data=d)
-
-    df10=objectIDs.join(fields)
-
-    df2=df10.join(clust2_labels)
-
-
-    df3=df2.join(feature_vectt)
-
-
-    # create the feature vector for the specific model
-    np.save(path_model_dir+'id_field_label_featureVect_model_'+str(run_number)+'.npy',df3.values)
-
-
-    df=df2.join(sil_score)
-
-    obj_cat=object_catalogue
+    # Define the curve points
+    x = np.arange(min_comps, upper_bound)
+    y = cum_var[min_comps:upper_bound]
     
-    obj_catalogue = pd.merge(df, obj_cat, on=["object_id", "field"])
+    # Normalize the curve to a [0, 1] bounding box to calculate geometry
+    x_norm = (x - x[0]) / (x[-1] - x[0])
+    y_norm = (y - y[0]) / (y[-1] - y[0]) if (y[-1] - y[0]) > 0 else np.zeros_like(y)
+    
+    # The 'knee' is the point that has the maximum vertical distance from a 
+    # straight diagonal line drawn from the start to the end of the curve
+    deviation_from_linear = y_norm - x_norm
+    optimal_k = int(x[np.argmax(deviation_from_linear)])
+    
+    # Slice the already-computed SVD matrix at the exact optimal dimension
+    svd_optimal = svd_full[:, :optimal_k]
+    retained_var = cum_var[optimal_k - 1]
+    
+    return svd_optimal, optimal_k, retained_var
 
+def compute_fast_per_sample_silhouette(features, labels, chunk_size=50000):
+    """Memory-safe chunked silhouette calculation for massive datasets."""
+    n_samples = features.shape[0]
+    unique_labels = np.unique(labels)
+    
+    centroids = np.vstack([features[labels == lbl].mean(axis=0) for lbl in unique_labels])
+    label_to_idx = {lbl: idx for idx, lbl in enumerate(unique_labels)}
+    mapped_labels = np.array([label_to_idx[lbl] for lbl in labels])
+    
+    sil_scores = np.zeros(n_samples, dtype=np.float32)
+    
+    for start in range(0, n_samples, chunk_size):
+        end = min(start + chunk_size, n_samples)
+        chunk_data = features[start:end]
+        chunk_lbls = mapped_labels[start:end]
+        
+        dists = pairwise_distances(chunk_data, centroids, metric='euclidean')
+        a = dists[np.arange(end - start), chunk_lbls]
+        dists[np.arange(end - start), chunk_lbls] = np.inf
+        b = np.min(dists, axis=1)
+        
+        denom = np.maximum(a, b)
+        chunk_sil = np.where(denom > 0, (b - a) / denom, 0.0)
+        sil_scores[start:end] = chunk_sil.astype(np.float32)
+        
+    return sil_scores
 
-    # create a catalog containing the initial objects with their morphology label along with their physical properties
-    np.savez_compressed(path_model_dir+'final_morph_clust'+str(run_number)+'.npz',object_id=obj_catalogue['object_id'].values,
-    field=obj_catalogue['field'].values,
-    labels=obj_catalogue.labels.values, silhouette_score=obj_catalogue.silhouette_score.values,
-    ra=obj_catalogue['ra'].values,
-    dec=obj_catalogue['dec'].values,skymap_id=obj_catalogue['skymap_id'].values,tract=obj_catalogue['tract'].values,patch=obj_catalogue['patch'].values,
-    footprint_Xmin=obj_catalogue['footprint_Xmin'].values,footprint_Ymin=obj_catalogue['footprint_Ymin'].values,footprint_Xmax=obj_catalogue['footprint_Xmax'].values,
-    footprint_Ymax=obj_catalogue['footprint_Ymax'].values,
-    g_extendedness_value=obj_catalogue['g_extendedness_value'].values,r_extendedness_value=obj_catalogue['r_extendedness_value'].values,
-    i_extendedness_value=obj_catalogue['i_extendedness_value'].values,z_extendedness_value=obj_catalogue['z_extendedness_value'].values,
-    photoz_best=obj_catalogue['photoz_best'].values,photoz_std_best=obj_catalogue['photoz_std_best'].values,
-    stellar_mass=obj_catalogue['stellar_mass'].values,stellar_mass_err68_min=obj_catalogue['stellar_mass_err68_min'].values,
-    stellar_mass_err68_max=obj_catalogue['stellar_mass_err68_max'].values,sfr=obj_catalogue['sfr'].values,sfr_err68_min=obj_catalogue['sfr_err68_min'].values,
-    sfr_err68_max=obj_catalogue['sfr_err68_max'].values)
+def kmeans_model(run_number, path_model_dir, threads, object_catalogue):
 
+    print(f'model {run_number}: THE FINAL MORPHOLOGICAL CLUSTERS ARE BEING CREATED')
 
-    print('model '+str(run_number)+': THE FINAL CLUSTERING IS FINISHED')
+    FINAL_OBJECT_IDS = np.load(os.path.join(path_model_dir, 'FINAL_OBJECT_IDS.npy'))
+    FINAL_FEATURE_VECT = np.load(os.path.join(path_model_dir, 'FINAL_FEATURE_VECT.npy'))
+
+    # --- SVD Compression via Auto-Knee Detection ---
+    print(f'model {run_number}: Compressing sparse TF-IDF features using Auto-Tuned TruncatedSVD...')
+    FINAL_FEATURE_VECT_COMPRESSED, optimal_dims, explained_var = auto_truncated_svd(FINAL_FEATURE_VECT)
+    
+    print(f'Auto-SVD detected structural noise floor after {optimal_dims} dimensions.')
+    print(f'SVD retained {explained_var*100:.1f}% of core morphological variance in {optimal_dims} dimensions.')
+
+    # L2 Normalization ensures K-Means (Euclidean) clusters exactly like Cosine similarity
+    print(f'model {run_number}: L2-Normalizing features to align K-Means with Cosine metrics...')
+    normalizer = Normalizer(norm='l2', copy=False)
+    FINAL_FEATURE_VECT_COMPRESSED = normalizer.fit_transform(FINAL_FEATURE_VECT_COMPRESSED)
+
+    # --- Automated Silhouette Sweep for Optimal Clusters ---
+    lower_clust_lim = 100
+    higher_clust_lim = 1000
+    step = 10
+    cluster_counts = np.arange(lower_clust_lim, higher_clust_lim + step, step)
+    silhouette_scores = []
+
+    print(f"Running automated Silhouette Score sweep ({lower_clust_lim} to {higher_clust_lim})...")
+    for k in cluster_counts:
+        sweep_kmeans = MiniBatchKMeans(n_clusters=k, random_state=42, n_init='auto', batch_size=2048)
+        sweep_labels = sweep_kmeans.fit_predict(FINAL_FEATURE_VECT_COMPRESSED)
+        
+        score_val = score(
+            FINAL_FEATURE_VECT_COMPRESSED, 
+            sweep_labels, 
+            metric='euclidean',
+            sample_size=10000, 
+            random_state=42
+        )
+        silhouette_scores.append(score_val)
+
+        print(f'model {run_number}: clusters: {k} | Silhouette Score: {score_val:.4f}')
+
+    # --- Programmatic Maximum Detection ---
+    optimal_idx = np.argmax(silhouette_scores)
+    optimal_clusters = cluster_counts[optimal_idx]
+    
+    print(f'\n>>> AUTOMATED MICRO-CLUSTER TUNING RESULT <<<')
+    print(f'The absolute peak of mathematical cluster cohesion found at: {optimal_clusters} clusters.')
+
+    # --- Save Plot of the Silhouette Curve ---
+    plt.figure(figsize=(10, 6))
+    plt.plot(cluster_counts, silhouette_scores, marker='o', linestyle='-', color='b', label='Silhouette Score')
+    plt.axvline(x=optimal_clusters, color='r', linestyle='--', label=f'Optimal k={optimal_clusters}')
+    plt.title('Silhouette Score For Optimal Micro-Clusters')
+    plt.xlabel('Number of Clusters (k)')
+    plt.ylabel('Silhouette Score (Higher is Better)')
+    plt.legend()
+    plt.grid(True)
+    plot_path = os.path.join(path_model_dir, f'silhouette_curve_model_{run_number}.png')
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"Saved Silhouette curve plot to: {plot_path}")
+
+    # --- Final Clustering ---
+    print(f"Running final highly-precise KMeans model with {optimal_clusters} clusters...")
+    kmeans = KMeans(n_clusters=optimal_clusters, random_state=42, n_init='auto')
+    clust2_labels = kmeans.fit_predict(FINAL_FEATURE_VECT_COMPRESSED)
+
+    print("Calculating final silhouette metrics...")
+    try:
+        sil_score_for_model = score(
+            FINAL_FEATURE_VECT_COMPRESSED, 
+            clust2_labels, 
+            metric='euclidean', 
+            sample_size=20000, 
+            random_state=42
+        )
+        print(f'model {run_number}: Final silhouette score at optimal k: {sil_score_for_model:.3f}')
+        
+        sil_scores_per_sample = compute_fast_per_sample_silhouette(FINAL_FEATURE_VECT_COMPRESSED, clust2_labels)
+    except Exception as e:
+        print(f"CRITICAL: Failed calculating silhouette metrics: {e}. Falling back to zeros.")
+        sil_scores_per_sample = np.zeros(len(FINAL_OBJECT_IDS))
+
+    df2 = pd.DataFrame({
+        'object_id': FINAL_OBJECT_IDS,
+        'labels': clust2_labels,
+        'silhouette_score': sil_scores_per_sample
+    })
+
+    feature_df = pd.DataFrame(FINAL_FEATURE_VECT)
+    df3 = pd.concat([df2, feature_df], axis=1)
+    
+    np.save(os.path.join(path_model_dir, f'id_label_featureVect_model_{run_number}.npy'), df3.values)
+
+    obj_catalogue = pd.merge(df2, object_catalogue, on="object_id")
+
+    np.savez_compressed(os.path.join(path_model_dir, f'final_morph_clust{run_number}.npz'),
+        **{col: obj_catalogue[col].values for col in obj_catalogue.columns})
+
+    print(f'model {run_number}: THE FINAL CLUSTERING IS FINISHED')
 
     return obj_catalogue

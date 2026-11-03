@@ -1,48 +1,38 @@
 import numpy as np
-import pandas as pd
-from tqdm import tqdm
-from multiprocessing import Pool
-from multiprocessing import Manager
+from sklearn.feature_extraction.text import TfidfTransformer
 
-def final_features(run_number,samples_ids,threads,clust1_labels, fields,samples_field,nr_clust):
+def final_features(run_number, samples_ids, threads, clust1_labels, nr_clust):
 
-    print('model '+str(run_number)+': THE FINAL FEATURE VECTOR IS BEING CREATED')
+    print(f'model {run_number}: THE FINAL FEATURE VECTOR IS BEING CREATED')
 
-    df11=pd.DataFrame({'labels': clust1_labels.astype(int), 'objectID': samples_ids.astype(int), 'field':samples_field.astype(str)})
+    # 1. Map your original Object IDs to contiguous integers (0 to N-1)
+    # unique_ids is the final sorted list of objects.
+    # mapped_ids replaces the original IDs with their index position in unique_ids.
+    unique_ids, mapped_ids = np.unique(samples_ids, return_inverse=True)
+    num_unique_objects = len(unique_ids)
 
-    ALL2=Manager().list()
+    # 2. Create a "flat index" for a virtual 2D grid
+    # Each row is an object, each column is a cluster label.
+    flat_indices = mapped_ids * nr_clust + clust1_labels
 
-    n_groups=nr_clust
+    # 3. Fast C-level counting of occurrences
+    # This replaces the entire Multiprocessing Pool and DataFrame filtering loop
+    counts_flat = np.bincount(flat_indices, minlength=num_unique_objects * nr_clust)
 
-    bins=np.arange(-0.5,n_groups+0.5,1)
+    # 4. Reshape the flat counts back into a raw 2D count matrix (Objects x Clusters)
+    counts_2d = counts_flat.reshape(num_unique_objects, nr_clust).astype(np.float32)
 
-    for field in fields:
-        objects=df11['objectID'][df11['field']==field].drop_duplicates().values
+    # 5. --- NEW: TF-IDF & L2 Normalization ---
+    print(f'model {run_number}: Applying TF-IDF weighting and L2 Normalization...')
+    
+    # sublinear_tf=True applies logarithmic scaling to the frequencies. 
+    # This ensures a galaxy with 100 spiral-arm patches isn't weighted 10x 
+    # more aggressively than a galaxy with 10 spiral-arm patches.
+    tfidf = TfidfTransformer(norm='l2', sublinear_tf=True)
+    
+    # Fit and transform the raw counts, then convert back to a dense NumPy array
+    final_feature_vect = tfidf.fit_transform(counts_2d).toarray()
 
-        global make_hist_vectors
+    print(f'model {run_number}: FINAL FEATURE VECTOR CREATED')
 
-        def make_hist_vectors(objectt):
-
-
-            if len(np.array([df11['labels'][(df11['objectID']==objectt) & (df11['field']==field)]]).shape)==1:
-                hist_labels=np.array([df11['labels'][(df11['objectID']==objectt) & (df11['field']==field)]])
-
-            else:
-
-                hist_labels=df11['labels'][(df11['objectID']==objectt) & (df11['field']==field)].values
-
-            hist,oth=np.histogram(hist_labels, bins=bins)
-            hist=hist/(np.sum(hist))
-            ALL2.append([field,hist,objectt])
-
-
-        with Pool(threads) as b:
-            r=list(tqdm(b.imap(make_hist_vectors, [objectt for objectt in objects]),total=len(objects)))
-
-    final_feature_vect=np.array(list(zip(*ALL2))[1])
-    final_object_ids=np.array(list(zip(*ALL2))[2])
-    final_field_vect=np.array(list(zip(*ALL2))[0])
-
-
-
-    return final_feature_vect,final_object_ids,final_field_vect
+    return final_feature_vect, unique_ids

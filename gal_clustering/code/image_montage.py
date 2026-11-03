@@ -1,264 +1,199 @@
-from astropy.visualization import make_lupton_rgb
-from tqdm import tqdm
 import os
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+from astropy.visualization import make_lupton_rgb
+from astropy.stats import sigma_clipped_stats
+from scipy.ndimage import gaussian_filter
+from tqdm import tqdm
 from multiprocessing import Pool
+from functools import partial
 
-def image_montage(run_number,threads,path_data_dir,path_model_dir,bands_rgb_imaging,obj_catalogue):
+# Helper function to prevent negative flux artifacts safely
+def clip_negatives(band):
+    band[band < 0] = 0.0
+    return band
 
-    print('model '+str(run_number)+': THE IMAGE MONTAGE IS BEING PRODUCED')
+def make_plot_lupton(images_data, objectID, silhouette_score, ax):
+    scale = [0.5, 0.7, 1.0]
+
+    image_r = np.copy(images_data[0])
+    image_g = np.copy(images_data[1])
+    image_b = np.copy(images_data[2])
+
+    image_r[~np.isfinite(image_r)] = 0.
+    image_g[~np.isfinite(image_g)] = 0.
+    image_b[~np.isfinite(image_b)] = 0.
+
+    image = make_lupton_rgb(image_r * scale[0], image_g * scale[1], image_b * scale[2], Q=10, stretch=1.8)
+
+    ax.imshow(image, aspect='equal', origin='lower')
+    ax.set_axis_off()
+    ax.set_title(f"{objectID}\nSil: {silhouette_score:.3f}", fontsize=10)
+
+def make_plot_mono(images_data, objectID, silhouette_score, ax):
+    image_mono = np.copy(images_data[0])
+    image_mono[~np.isfinite(image_mono)] = 0.
+
+    image_stretched = make_lupton_rgb(image_mono, image_mono, image_mono, Q=10, stretch=1.8)
+    image_inverted = 255 - image_stretched
+
+    ax.imshow(image_inverted, aspect='equal', origin='lower')
+    ax.set_axis_off()
+    ax.set_title(f"{objectID}\nSil: {silhouette_score:.3f}", fontsize=10)
+
+def make_plot_unsharp(images_data, objectID, silhouette_score, ax, kernel_fraction):
+    """
+    kernel_fraction: 0.6 for Large Kernel, 0.15 for Small Kernel 
+    """
+    # Adjust scaling - unsharp masking heavily amplifies noise, 
+    # so we back off the RGB multipliers slightly to prevent blowing out the cores.
+    scale = [0.4, 0.6, 0.9]
+
+    # Use float32 to save RAM during the heavy convolutions
+    image_r = np.copy(images_data[0]).astype(np.float32)
+    image_g = np.copy(images_data[1]).astype(np.float32)
+    image_b = np.copy(images_data[2]).astype(np.float32)
+
+    image_r[~np.isfinite(image_r)] = 0.
+    image_g[~np.isfinite(image_g)] = 0.
+    image_b[~np.isfinite(image_b)] = 0.
+
+    Ymax, Xmax = image_r.shape
+    max_dim = max(Xmax, Ymax)
+    # Calculate the physical sigma once
+    computed_sigma = max(1.0, max_dim * kernel_fraction) 
+
+    if kernel_fraction==0.02:
+        computed_sigma=4
+
+    def apply_unsharp(band, sig):
+        # 1. Blur
+        blurred = gaussian_filter(band, sigma=sig)
+        # 2. Subtract
+        sharpened = (2.0 * band) - blurred
+        # 3. Aggressive clip to zero to prevent Lupton RGB math errors
+        sharpened = np.clip(sharpened, 0.0, None)
+        return sharpened
+
+    # Apply the mask
+    r_unsharp = apply_unsharp(image_r, computed_sigma)
+    g_unsharp = apply_unsharp(image_g, computed_sigma)
+    b_unsharp = apply_unsharp(image_b, computed_sigma)
+
+    # Use a lower Q and stretch parameter because the background is already gone.
+    # If the stretch is too high on an unsharp image, you just see amplified sensor noise.
+    image = make_lupton_rgb(
+        r_unsharp * scale[0], 
+        g_unsharp * scale[1], 
+        b_unsharp * scale[2], 
+        Q=5, 
+        stretch=1.2
+    )
+
+    ax.imshow(image, aspect='equal', origin='lower')
+    ax.set_axis_off()
+    ax.set_title(f"{objectID}\nSil: {silhouette_score:.3f}", fontsize=10)
 
     
-    def make_plot_lupton(images_data,objectID,silhouette_score,i,axs,tup,obj_nr,field):
+def process_single_cluster(cluster_data, path_rgb, path_mono, path_unsharp_large, path_unsharp_small, path_npy_dir):
+    cluster_id, df_cluster = cluster_data
+    total_objects = len(df_cluster)
+    
+    # 1. Setup Data
+    if total_objects == 1:
+        df_plot = df_cluster
+        rows, cols = 1, 1
+    elif total_objects >= 30:
+        df_sorted = df_cluster.sort_values('silhouette_score', ascending=False)
+        df_plot = pd.concat([df_sorted.head(10), df_sorted.iloc[10:-10].sample(n=10) if len(df_sorted) > 20 else pd.DataFrame(), df_sorted.tail(10)])
+        rows, cols = 5, 6
+    else:
+        df_plot = df_cluster.sort_values('silhouette_score', ascending=False)
+        cols = int(np.ceil(np.sqrt(total_objects)))
+        rows = int(np.ceil(total_objects / cols))
 
-        scale = [0.5, 0.7, 1.0]
+    # 2. Setup 4 separate Figures safely
+    fig_rgb, axs_rgb = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4))
+    fig_mono, axs_mono = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4))
+    fig_ul, axs_ul = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4))
+    fig_us, axs_us = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4))
+    
+    # Ensure array format for flat iteration
+    axs_rgb = np.atleast_1d(axs_rgb)
+    axs_mono = np.atleast_1d(axs_mono)
+    axs_ul = np.atleast_1d(axs_ul)
+    axs_us = np.atleast_1d(axs_us)
 
-        image_r = images_data[0]
-        image_g = images_data[1]
-        image_b = images_data[2]
+    objectIDs = df_plot['object_id'].values.astype(str)
+    sil_scores = np.round(df_plot['silhouette_score'].values, 3)
+    tile_indices = df_plot['tile_index'].values
 
-        subplot_name=str(objectID)+'_'+field[0]+'_'+str(silhouette_score)
+    # 3. Plotting Loop
+    for i, (obj_id, sil_score, tile_idx) in enumerate(zip(objectIDs, sil_scores, tile_indices)):
+        npy_path = os.path.join(path_npy_dir, f'tile_{tile_idx}', f"{obj_id}.npy")
 
-
-        image_r[~np.isfinite(image_r)]=0.
-        image_g[~np.isfinite(image_g)]=0.
-        image_b[~np.isfinite(image_b)]=0.
+        if not os.path.exists(npy_path):
+            for ax in (axs_rgb.flat[i], axs_mono.flat[i], axs_ul.flat[i], axs_us.flat[i]):
+                ax.set_axis_off()
+            continue
+            
+        images_data = np.load(npy_path, allow_pickle=True)[1:][::-1]
         
-        image = make_lupton_rgb(image_r*scale[0], image_g*scale[1], image_b*scale[2], Q=10, stretch=0.5)
-
-        if obj_nr==1:
-            axs.imshow(image, aspect='equal')
-            axs.set_axis_off()
-            axs.set_title(subplot_name, fontsize=20)
-
-        if obj_nr>1 and obj_nr<30:
-
-            if obj_nr==2:
-
-                axs[tup[i]].imshow(image, aspect='equal')
-                axs[tup[i]].set_axis_off()
-                axs[tup[i]].set_title(subplot_name, fontsize=20)
-
-            if obj_nr>2:
-
-                axs[tup[i][0], tup[i][1]].imshow(image, aspect='equal')
-                axs[tup[i][0], tup[i][1]].set_axis_off()
-                axs[tup[i][0], tup[i][1]].set_title(subplot_name,fontsize=20)
-
-
-
-        if obj_nr==30:
-
-            axs[tup[i][0], tup[i][1]].imshow(image, aspect='equal')
-            axs[tup[i][0], tup[i][1]].set_axis_off()
-            axs[tup[i][0], tup[i][1]].set_title(subplot_name, fontsize=25)
-            
-
-
-    ind=obj_catalogue.index
-
-
-    d = {'ind': ind}
-    ind = pd.DataFrame(data=d)
-
-    obj_catalogue=obj_catalogue.join(ind)
-
-
-    obj_catalogue.set_index('labels',inplace=True)
-
-    clusters=sorted(obj_catalogue.index.drop_duplicates().astype(int))
-
-    os.chdir(path_data_dir)
-
-    path_galaxy_montage=path_model_dir+'output_montage_'+str(run_number)
-    if not os.path.exists(path_galaxy_montage):
-
-        os.mkdir(path_galaxy_montage)
-
-    bands=bands_rgb_imaging
-
-    global process2
-
-    def process2(cluster):
-
-
-        path=path_galaxy_montage+'/'
-
+        make_plot_lupton(images_data, obj_id, sil_score, axs_rgb.flat[i])
+        make_plot_mono(images_data, obj_id, sil_score, axs_mono.flat[i])
         
-        if len(np.array([obj_catalogue['object_id'][cluster]]).shape)==1:
-
-            objectID=obj_catalogue['object_id'][cluster].astype(int)
-
-            silhouette_score=obj_catalogue['silhouette_score'][cluster]
-            fieldd=obj_catalogue['field'][cluster]
-
-
-            images_data=np.load('/beegfs/car/ilazar/models/model_187/footpr_realigned/'+str(objectID)+'.npy',allow_pickle=True)
-
-            images_data=images_data[::-1][1:]
-            rows=1
-            cols=1
-            fig, axs = plt.subplots(rows, cols)
-            obj_nr=1
-            rows=1
-            cols=1
-            i=0
-            tup=[]
-
-            for row in range(rows):
-                for col in range(cols):
-                    tup.append([row,col])
-
-
-            make_plot_lupton(images_data,objectID,silhouette_score,i,axs,tup,obj_nr,fieldd)
-
-            fig.tight_layout()
-            fig.savefig(path+str(cluster))
-
-
-        if len(np.array([obj_catalogue['object_id'][cluster]]).shape)!=1 and len(obj_catalogue['object_id'][cluster].values)>=30:
-
-
-            DF_MOD=obj_catalogue.loc[cluster]
-            DF_MOD.set_index('ind',inplace=True)
-
-            df_large=DF_MOD.nlargest(10, 'silhouette_score')
-            df_large=df_large.sort_values(by=['silhouette_score'],ascending=False)
-            df_large_index=df_large.index
-
-            df_small=DF_MOD.drop(df_large_index)
-
-            df_small=df_small.nsmallest(10, 'silhouette_score')
-            df_small=df_small.sort_values(by=['silhouette_score'],ascending=False)
-            df_small_index=df_small.index
-
-
-            index_small_large=np.concatenate((df_small_index,df_large_index))
-            new_df=DF_MOD.drop(index_small_large)
-
-            new_df=new_df.sample(n = 10)
-
-            frames = [df_large, new_df, df_small]
-
-            result = pd.concat(frames)
-
-            objectID=result['object_id'].values.astype(int)
-            silhouette_score=np.round(result['silhouette_score'].values,3)
-            fieldd=result['field'].values
-
-            rows=5
-            cols=6
-
-            map_size=[36,30]
-            fig, axs = plt.subplots(rows, cols,figsize=map_size)
-
-            tup=[]
-
-            for row in range(rows):
-                for col in range(cols):
-                    tup.append([row,col])
-
-            obj_nr=len(objectID)
-
-
-
-
-            for i in range(len(objectID)):
-
-                objectID_loop=objectID[i]
-
-                silhouette_score_loop=silhouette_score[i]
-                fieldd_loop=fieldd[i]
-
-                images_data=np.load('/beegfs/car/ilazar/models/model_187/footpr_realigned/'+str(objectID_loop)+'.npy',allow_pickle=True)
-
-                
-                
-                images_data=images_data[::-1][1:]
-            
-                make_plot_lupton(images_data,objectID_loop,silhouette_score_loop,i,axs,tup,obj_nr,fieldd_loop)
-
-            fig.suptitle('Nr. objects: '+str(len(DF_MOD)),fontsize=25,y=1.2)
-            fig.tight_layout()
-            fig.savefig(path+str(cluster))
-            del DF_MOD
-
-
-
-        if len(np.array([obj_catalogue['object_id'][cluster]]).shape)!=1 and len(obj_catalogue['object_id'][cluster].values)<30:
-
-
-            DF_MOD=obj_catalogue.loc[cluster]
-            
-            DF_MOD.set_index('ind',inplace=True)
-
-
-            DF_MOD=DF_MOD.sort_values(by=['silhouette_score'],ascending=False)
-
-            objectID=DF_MOD['object_id'].values.astype(int)
-            silhouette_score=np.round(DF_MOD['silhouette_score'].values,3)
-            fieldd=DF_MOD['field'].values
-
-            sqr=np.sqrt(len(objectID))
-
-            if sqr%1>0.5:
-                cols=int(np.sqrt(len(objectID))+1)
-                rows=cols
-
-            if sqr%1<0.5:
-                cols=int(np.sqrt(len(objectID))+1)
-                rows=cols-1
-
-
-            subimage_size=5
-
-            map_size=[cols*subimage_size,rows*subimage_size]
-
-            fig, axs = plt.subplots(rows, cols,figsize=map_size)
-
-
-            tup=[]
-
-            for row in range(rows):
-                for col in range(cols):
-                    if round(rows*cols,0)==2:
-                        tup.append(col)
-
-                    else:
-
-                        tup.append([row,col])
-
-            obj_nr=len(objectID)
-
-
-
-            for i in range(len(objectID)):
-
-                objectID_loop=objectID[i]
-                silhouette_score_loop=silhouette_score[i]
-                fieldd_loop=fieldd[i]
-
-                images_data=np.load('/beegfs/car/ilazar/models/model_187/footpr_realigned/'+str(objectID_loop)+'.npy',allow_pickle=True)
-
-                images_data=images_data[::-1][1:]
-                make_plot_lupton(images_data,objectID_loop,silhouette_score_loop,i,axs,tup,obj_nr,fieldd_loop)
-
-            if len(objectID)< rows*cols:
-
-                for j in range(i+1,len(tup)):
-                    axs[tup[j][0], tup[j][1]].set_axis_off()
-
-            fig.suptitle('Nr. objects: '+str(len(DF_MOD)),fontsize=25,y=1.2)
-            fig.tight_layout()
-            fig.savefig(path+str(cluster))
-            del DF_MOD
-            
-
-
-    with Pool(threads) as b:
-        r=list(tqdm(b.imap(process2, [k for k in clusters]),total=len(clusters)))
-
-    print('model '+str(run_number)+': THE IMAGE MONTAGE IS FINISHED')
-
+        # Pass the kernel fractions corresponding to extraction scales
+        make_plot_unsharp(images_data, obj_id, sil_score, axs_ul.flat[i], kernel_fraction=0.3)  
+        make_plot_unsharp(images_data, obj_id, sil_score, axs_us.flat[i], kernel_fraction=0.1) 
+
+    # 4. Hide empty subplots
+    for i in range(len(objectIDs), len(axs_rgb.flat)):
+        axs_rgb.flat[i].set_axis_off()
+        axs_mono.flat[i].set_axis_off()
+        axs_ul.flat[i].set_axis_off()
+        axs_us.flat[i].set_axis_off()
+
+    # 5. Save and aggressively clear memory
+    title_text = f'Cluster: {cluster_id} | Total Objects: {total_objects}'
+    
+    def save_and_clear(fig, path, suffix, title):
+        fig.suptitle(title, fontsize=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(path, f"cluster_{cluster_id}_{suffix}.png"))
+        fig.clf() # Critical for memory
+        plt.close(fig)
+
+    save_and_clear(fig_rgb, path_rgb, "rgb", title_text + " (Lupton RGB)")
+    save_and_clear(fig_mono, path_mono, "mono", title_text + " (Monochrome)")
+    save_and_clear(fig_ul, path_unsharp_large, "unsharp_large", title_text + " (Unsharp: Large Kernel 0.6x)")
+    save_and_clear(fig_us, path_unsharp_small, "unsharp_small", title_text + " (Unsharp: Small Kernel 0.15x)")
+
+
+def image_montage(run_number, threads, path_data_dir, path_model_dir, obj_catalogue):
+
+    print(f'model {run_number}: THE IMAGE MONTAGE IS BEING PRODUCED')
+
+    # Setup 4 distinct output directories
+    paths = {
+        'path_rgb': os.path.join(path_model_dir, f'montage_{run_number}_rgb'),
+        'path_mono': os.path.join(path_model_dir, f'montage_{run_number}_mono'),
+        'path_unsharp_large': os.path.join(path_model_dir, f'montage_{run_number}_unsharp_large'),
+        'path_unsharp_small': os.path.join(path_model_dir, f'montage_{run_number}_unsharp_small')
+    }
+    
+    for p in paths.values():
+        os.makedirs(p, exist_ok=True)
+
+    grouped_clusters = list(obj_catalogue.groupby('labels'))
+
+    worker_func = partial(
+        process_single_cluster, 
+        **paths,
+        path_npy_dir=path_data_dir 
+    )
+    
+    with Pool(threads) as pool:
+        list(tqdm(pool.imap_unordered(worker_func, grouped_clusters), total=len(grouped_clusters)))
+
+    print(f'model {run_number}: THE IMAGE MONTAGE IS FINISHED')
