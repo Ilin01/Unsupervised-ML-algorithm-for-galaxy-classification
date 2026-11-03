@@ -137,7 +137,7 @@ def run_cleaning_pipeline(path_input_dir, path_output_dir, threads=16):
 # --- HOW TO RUN IT ---
 if __name__ == '__main__':
     # Define your paths
-    path_data_dir = "/beegfs/car/ilazar/EuclidML/data/Q1/cutouts/npy_stacked_z015M7/" # Where your current arrays live
-    path_clean_dir = "/beegfs/car/ilazar/EuclidML/data/Q1/cutouts/npy_stacked_z015M7_clean/" # Where the new ones will go
+    path_data_dir = "/.../npy_stacked_z015M7/" # Where your current arrays live
+    path_clean_dir = "/.../npy_stacked_z015M7_clean/" # Where the new ones will go
     
     run_cleaning_pipeline(path_input_dir=path_data_dir, path_output_dir=path_clean_dir, threads=16)
