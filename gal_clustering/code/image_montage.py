@@ -1,3 +1,22 @@
+"""
+Stage 7 of the pipeline: image montages for visual inspection of the clusters.
+
+For every final cluster four PNG montages of member galaxies are produced:
+
+  * rgb           - Lupton RGB composite of the three ``bands_rgb_imaging``
+  * mono          - inverted (dark-on-white) Lupton stretch of one band
+  * unsharp_large - RGB after unsharp masking with a wide Gaussian kernel
+  * unsharp_small - RGB after unsharp masking with a narrow Gaussian kernel
+
+Unsharp masking subtracts a blurred copy of the image, which removes the
+smooth light distribution and highlights internal structure (arms, bars,
+rings, tidal features).
+
+Clusters with 30+ members show the 10 objects with the highest silhouette
+score (most typical), 10 random ones from the middle, and the 10 lowest
+(least typical). Each panel title shows the object ID and its silhouette.
+Clusters are processed in parallel, one cluster per worker.
+"""
 import os
 import numpy as np
 import pandas as pd
@@ -9,11 +28,17 @@ from multiprocessing import Pool
 from functools import partial
 
 def make_plot_lupton(images_data, objectID, silhouette_score, ax, rgb_indices):
+    """Draw a Lupton et al. (2004) asinh-stretched RGB composite on ``ax``.
+
+    ``rgb_indices`` gives the cutout band indices used as R, G and B; each
+    channel is scaled by a fixed factor to balance the colours.
+    """
     scale = [0.5, 0.7, 1.0]
     image_r = np.copy(images_data[rgb_indices[0]])
     image_g = np.copy(images_data[rgb_indices[1]])
     image_b = np.copy(images_data[rgb_indices[2]])
 
+    # Replace NaN/inf pixels (e.g. masked or off-detector areas) with 0.
     for img in (image_r, image_g, image_b):
         img[~np.isfinite(img)] = 0.
 
@@ -23,8 +48,11 @@ def make_plot_lupton(images_data, objectID, silhouette_score, ax, rgb_indices):
     ax.set_title(f"{objectID}\nSil: {silhouette_score:.3f}", fontsize=10)
 
 def make_plot_mono(images_data, objectID, silhouette_score, ax, mono_idx):
+    """Draw a single band with a Lupton asinh stretch, inverted so the galaxy
+    appears dark on a white background (makes faint features easier to see)."""
     image_mono = np.copy(images_data[mono_idx])
     image_mono[~np.isfinite(image_mono)] = 0.
+    # Same band in all three channels -> grey-scale image; 255 - x inverts it.
     image_stretched = make_lupton_rgb(image_mono, image_mono, image_mono, Q=10, stretch=1.8)
     
     ax.imshow(255 - image_stretched, aspect='equal', origin='lower')
@@ -32,6 +60,13 @@ def make_plot_mono(images_data, objectID, silhouette_score, ax, mono_idx):
     ax.set_title(f"{objectID}\nSil: {silhouette_score:.3f}", fontsize=10)
 
 def make_plot_unsharp(images_data, objectID, silhouette_score, ax, kernel_fraction, rgb_indices):
+    """Draw an unsharp-masked RGB composite on ``ax``.
+
+    The Gaussian blur width is ``kernel_fraction`` times the cutout size (at
+    least 1 pixel), so the filtered scale adapts to the galaxy size. Each band
+    becomes ``2*band - blurred(band)`` (= band + its high-pass residual),
+    clipped at 0, before the Lupton RGB stretch.
+    """
     scale = [0.4, 0.6, 0.9]
     image_r = np.copy(images_data[rgb_indices[0]]).astype(np.float32)
     image_g = np.copy(images_data[rgb_indices[1]]).astype(np.float32)
@@ -41,6 +76,7 @@ def make_plot_unsharp(images_data, objectID, silhouette_score, ax, kernel_fracti
         img[~np.isfinite(img)] = 0.
 
     computed_sigma = max(1.0, max(image_r.shape) * kernel_fraction) 
+    # Special case: a fraction of exactly 0.02 uses a fixed 4-pixel kernel.
     if kernel_fraction == 0.02:
         computed_sigma = 4
 
@@ -59,26 +95,49 @@ def make_plot_unsharp(images_data, objectID, silhouette_score, ax, kernel_fracti
     ax.set_title(f"{objectID}\nSil: {silhouette_score:.3f}", fontsize=10)
 
 def process_single_cluster(cluster_data, path_rgb, path_mono, path_unsharp_large, path_unsharp_small, path_npy_dir, rgb_band_indices, mono_band_index):
+    """Build and save the four montages of one cluster (runs in a worker).
+
+    Parameters
+    ----------
+    cluster_data : tuple (cluster_id, DataFrame)
+        One item of ``obj_catalogue.groupby('labels')``; the frame must have
+        ``object_id``, ``silhouette_score`` and ``tile_index`` columns.
+    path_rgb, path_mono, path_unsharp_large, path_unsharp_small : str
+        Output folders for the four montage types.
+    path_npy_dir : str
+        Folder with the ``.npy`` cutouts.
+    rgb_band_indices : list of int
+        Band indices used as R, G, B.
+    mono_band_index : int
+        Band index for the monochrome montage.
+    """
     cluster_id, df_cluster = cluster_data
     total_objects = len(df_cluster)
     
+    # --- Choose which objects to show and the grid layout.
     if total_objects == 1:
         df_plot = df_cluster
         rows, cols = 1, 1
+    # Large cluster: 30 panels on a 5x6 grid = top 10 by silhouette, 10 random
+    # from the middle of the ranking, bottom 10.
     elif total_objects >= 30:
         df_sorted = df_cluster.sort_values('silhouette_score', ascending=False)
         df_plot = pd.concat([df_sorted.head(10), df_sorted.iloc[10:-10].sample(n=10) if len(df_sorted) > 20 else pd.DataFrame(), df_sorted.tail(10)])
         rows, cols = 5, 6
+    # Small cluster: show everyone, sorted by silhouette, on a near-square grid.
     else:
         df_plot = df_cluster.sort_values('silhouette_score', ascending=False)
         cols = int(np.ceil(np.sqrt(total_objects)))
         rows = int(np.ceil(total_objects / cols))
 
+    # One figure per montage type, 4x4 inches per panel.
     fig_rgb, axs_rgb = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4))
     fig_mono, axs_mono = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4))
     fig_ul, axs_ul = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4))
     fig_us, axs_us = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4))
     
+    # plt.subplots returns a bare Axes for a 1x1 grid; wrap it so `.flat`
+    # works uniformly below.
     axs_rgb, axs_mono, axs_ul, axs_us = map(np.atleast_1d, (axs_rgb, axs_mono, axs_ul, axs_us))
 
     objectIDs = df_plot['object_id'].values.astype(str)
@@ -86,8 +145,10 @@ def process_single_cluster(cluster_data, path_rgb, path_mono, path_unsharp_large
     tile_indices = df_plot['tile_index'].values
 
     for i, (obj_id, sil_score, tile_idx) in enumerate(zip(objectIDs, sil_scores, tile_indices)):
+        # Cutout path: tile_<idx>/<id>.npy, or <id>.npy if there is no tile.
         npy_path = os.path.join(path_npy_dir, f'tile_{tile_idx}', f"{obj_id}.npy") if not pd.isna(tile_idx) else os.path.join(path_npy_dir, f"{obj_id}.npy")
 
+        # Missing cutout: leave a blank panel.
         if not os.path.exists(npy_path):
             for ax in (axs_rgb.flat[i], axs_mono.flat[i], axs_ul.flat[i], axs_us.flat[i]):
                 ax.set_axis_off()
@@ -100,11 +161,14 @@ def process_single_cluster(cluster_data, path_rgb, path_mono, path_unsharp_large
         make_plot_unsharp(images_data, obj_id, sil_score, axs_ul.flat[i], kernel_fraction=0.3, rgb_indices=rgb_band_indices)  
         make_plot_unsharp(images_data, obj_id, sil_score, axs_us.flat[i], kernel_fraction=0.1, rgb_indices=rgb_band_indices) 
 
+    # Hide unused panels at the end of the grid.
     for i in range(len(objectIDs), len(axs_rgb.flat)):
         for axs in (axs_rgb, axs_mono, axs_ul, axs_us):
             axs.flat[i].set_axis_off()
 
     title_text = f'Cluster: {cluster_id} | Total Objects: {total_objects}'
+    # Save a figure and release its memory (important when a worker builds
+    # thousands of figures).
     def save_and_clear(fig, path, suffix, title):
         fig.suptitle(title, fontsize=20)
         fig.tight_layout()
@@ -118,6 +182,12 @@ def process_single_cluster(cluster_data, path_rgb, path_mono, path_unsharp_large
     save_and_clear(fig_us, path_unsharp_small, "unsharp_small", title_text + " (Unsharp: Small Kernel 0.15x)")
 
 def image_montage(run_number, threads, path_data_dir, path_model_dir, obj_catalogue, rgb_band_indices, mono_band_index):
+    """Write the montages of every cluster into ``montage_<run>_*`` folders
+    inside ``path_model_dir``.
+
+    ``obj_catalogue`` is the frame returned by ``kmeans_model`` (needs the
+    ``labels``, ``object_id``, ``silhouette_score`` and ``tile_index`` columns).
+    """
     print(f'model {run_number}: THE IMAGE MONTAGE IS BEING PRODUCED')
 
     paths = {
@@ -130,6 +200,7 @@ def image_montage(run_number, threads, path_data_dir, path_model_dir, obj_catalo
     for p in paths.values():
         os.makedirs(p, exist_ok=True)
 
+    # One (cluster_id, members) task per cluster, processed in parallel.
     grouped_clusters = list(obj_catalogue.groupby('labels'))
     worker_func = partial(
         process_single_cluster, 

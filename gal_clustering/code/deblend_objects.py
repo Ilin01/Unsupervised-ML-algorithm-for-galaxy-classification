@@ -1,3 +1,16 @@
+"""
+Optional, standalone pre-processing tool (not called by ``run_classify``).
+
+Isolates the central galaxy in each stacked cutout: every pixel that does not
+belong to the connected group of above-noise VIS pixels at the image centre is
+set to 0 in all bands (removing neighbours / blended sources), and the result
+is re-cropped to the smallest square, centred on the original cutout centre,
+that contains the whole object. Cleaned cutouts are saved as
+``<name>_clean.npy`` in a separate folder.
+
+Assumes 4-band cutouts ordered [VIS, Y, J, H] named ``*_stacked.npy``.
+Run directly:  python deblend_objects.py  (edit the paths at the bottom).
+"""
 import os
 import glob
 import numpy as np
@@ -12,6 +25,20 @@ def clean_and_square_image(file_path, path_output_dir, threshold_sigma=1.5):
     Loads a stacked .npy file, isolates the central object based on VIS noise,
     masks all other bands, crops it to a perfect square anchored to the ORIGINAL center, 
     and saves it.
+
+    Parameters
+    ----------
+    file_path : str
+        Input ``.npy`` file of shape (4, H, W).
+    path_output_dir : str
+        Folder for the cleaned file.
+    threshold_sigma : float
+        Detection threshold in units of the background standard deviation.
+
+    Returns
+    -------
+    True on success, None if no object is found near the centre, and False
+    if an error occurred.
     """
     try:
         # Load the 4-band array [VIS, Y, J, H]
@@ -22,6 +49,7 @@ def clean_and_square_image(file_path, path_output_dir, threshold_sigma=1.5):
         cy, cx = vis_band.shape[0] // 2, vis_band.shape[1] // 2
         
         # 1. Calculate precise background noise on the VIS band
+        #    (sigma clipping rejects the galaxy pixels, leaving the sky)
         _, bkg_median, bkg_std = sigma_clipped_stats(vis_band, sigma=3.0, maxiters=5)
         noise_threshold = bkg_median + (threshold_sigma * bkg_std)
 
@@ -29,6 +57,7 @@ def clean_and_square_image(file_path, path_output_dir, threshold_sigma=1.5):
         binary_mask = vis_band > noise_threshold
 
         # 3. Label all contiguous connected components
+        #    (scipy's default 4-connectivity: pixels touching by an edge)
         labeled_mask, num_features = label(binary_mask)
 
         # 4. Identify the central object
@@ -72,11 +101,12 @@ def clean_and_square_image(file_path, path_output_dir, threshold_sigma=1.5):
         src_x0 = cx - max_radius
         src_x1 = cx + max_radius + 1
 
-        # Destination bounds
+        # Destination bounds (the full output square, before clamping)
         dst_y0, dst_y1 = 0, new_size
         dst_x0, dst_x1 = 0, new_size
 
         # Clamp source bounds to array limits and adjust destination bounds
+        # (parts of the square outside the original image stay zero-padded)
         if src_y0 < 0:
             dst_y0 -= src_y0
             src_y0 = 0
@@ -107,6 +137,8 @@ def clean_and_square_image(file_path, path_output_dir, threshold_sigma=1.5):
 
 
 def run_cleaning_pipeline(path_input_dir, path_output_dir, threads=16):
+    """Clean every ``*_stacked.npy`` in ``path_input_dir`` in parallel and
+    write the results to ``path_output_dir``."""
     print("STARTING IMAGE ISOLATION PIPELINE...")
     
     os.makedirs(path_output_dir, exist_ok=True)
